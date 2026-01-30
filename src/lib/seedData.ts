@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 
 const FOOD_TIERS = [
-  { name: 'Free',    min_amount: 0,  max_amount: 0,    default_value: 0,    sort_order: 0, color: '#6b7280' },
+  { name: 'Free',    min_amount: 0,  max_amount: 0,    default_value: 0,    sort_order: 0, color: '#3d4350' },
   { name: 'Light',   min_amount: 1,  max_amount: 5,    default_value: 3,    sort_order: 1, color: '#a7c4a0' },
   { name: 'Simple',  min_amount: 6,  max_amount: 10,   default_value: 8,    sort_order: 2, color: '#7db8a8' },
   { name: 'Casual',  min_amount: 11, max_amount: 17,   default_value: 14,   sort_order: 3, color: '#5ba3a3' },
@@ -12,7 +12,7 @@ const FOOD_TIERS = [
 ]
 
 const DRINK_TIERS = [
-  { name: 'None',    min_amount: 0,  max_amount: 0,    default_value: 0,    sort_order: 0, color: '#6b7280' },
+  { name: 'None',    min_amount: 0,  max_amount: 0,    default_value: 0,    sort_order: 0, color: '#3d4350' },
   { name: 'Home',    min_amount: 1,  max_amount: 3,    default_value: 2,    sort_order: 1, color: '#a7c4a0' },
   { name: 'Café',    min_amount: 4,  max_amount: 8,    default_value: 6,    sort_order: 2, color: '#7db8a8' },
   { name: 'Single',  min_amount: 9,  max_amount: 15,   default_value: 12,   sort_order: 3, color: '#5ba3a3' },

@@ -1,91 +1,122 @@
-# Phase 3: Calendar View
+# Phase 4: Logging Flow
 
-Build the calendar heatmap showing the month with AM/PM periods for each day.
+Build the logging dialog for recording period entries.
 
-## 1. Component Structure
+## 1. Logging Dialog Component
 
-Create a CalendarView component that displays in the main dashboard area. Later this will be the left 2/3 of a two-panel layout.
+Create a modal/dialog that appears when clicking any non-future period.
 
-## 2. Tab Navigation
+### Dialog header
+- Show the date and period type (e.g., "January 15 - PM")
+- Close button (X) in the corner
 
-Add tabs above the calendar: Food | Drinks | Combined
-- Food and Drinks tabs show their respective calendar
-- Combined tab shows placeholder text: "Combined view coming soon"
-- Track active category in state
+### Tier selection
+- Display all tiers for the active category as selectable buttons or cards
+- Include Free/None tier (the $0 tier)
+- Include Splurge tier
+- Show tier name and dollar range on each option (e.g., "Casual $11-17")
+- Visually highlight the selected tier
+- Use each tier's color as background or accent
 
-## 3. Month Header and Navigation
+### Dollar amount field (optional)
+- Number input field, initially empty
+- Placeholder text: "Optional: exact amount"
+- When filled, the value maps to the appropriate tier for color-coding:
+  - Find the tier where min_amount <= value <= max_amount
+  - If value > 50, maps to Splurge
+- When Splurge tier is selected, this field becomes required
+  - Show validation message if Splurge selected without amount
 
-- Display month name and year (e.g., "January 2025")
-- Left arrow button to navigate to previous month
-- Right arrow button to navigate to next month (only visible when viewing a past month, hidden on current month)
-- "Today" button to jump back to current month (only visible when viewing a past month)
+### Note field (optional)
+- Text input field
+- Placeholder text: "Optional: add a note"
+- Single line is fine, or small textarea
 
-## 4. Calendar Grid Layout
+### Action buttons
+- "Save" button - disabled if Splurge selected without dollar amount
+- "Cancel" button - closes dialog without saving
+- If editing an existing entry, also show "Clear" button to remove the entry
 
-- Display all days of the current month in a grid
-- Each day is split into two rows: AM and PM
-- Day numbers visible on the left side or within each day cell
-- Consider a layout like:
-```
-  [1] [AM cell] [PM cell]
-  [2] [AM cell] [PM cell]
-  ...
-```
-  Or a more traditional calendar grid with AM/PM stacked within each day cell
+## 2. Dialog Behavior
 
-## 5. Period States
+### Opening for new entry (unlogged period)
+- All fields empty
+- No tier pre-selected
 
-Determine and render each period's state:
+### Opening for existing entry (logged period)
+- Pre-select the saved tier
+- Pre-fill dollar amount if one was saved
+- Pre-fill note if one was saved
+- Show "Clear" button to delete the entry
 
-### Future periods
-- Faded/transparent appearance
-- Not clickable (cursor: default)
+### On Save
+- If new entry: INSERT into period_entries
+- If existing entry: UPDATE the period_entry
+- Required fields: user_id, category_id, date, period_type, tier_id
+- Optional fields: dollar_amount, note
+- Close dialog after successful save
+- Calendar should reflect the change (tier color)
 
-### Current period
-- Pulsing animation with a prominent "+" icon or button
-- Should clearly invite interaction
-- Determine current period using:
-  - user_settings.am_start_hour (default 7) and pm_start_hour (default 15)
-  - Before pm_start_hour = AM, after = PM
-  - Compare against current date and time
+### On Clear (existing entries only)
+- DELETE the period_entry
+- Close dialog
+- Calendar should show period as gray (unlogged)
 
-### Past periods (unlogged)
-- Gray background (#6b7280 or similar)
-- Clickable (cursor: pointer)
+### On Cancel
+- Close dialog without any database changes
 
-### Past periods (logged)
-- Background color matches the tier's color from the database
-- Clickable (cursor: pointer)
+## 3. Dollar Amount to Tier Mapping
 
-## 6. Data Loading
+When user enters a dollar amount, determine the tier:
 
-- Fetch period_entries from database for the displayed month and active category
-- Fetch user_settings for AM/PM hour boundaries
-- Match entries to their grid positions by date and period_type
+Food:
+- $0 = Free
+- $1-5 = Light
+- $6-10 = Simple
+- $11-17 = Casual
+- $18-26 = Takeout
+- $27-37 = Dining
+- $38-50 = Upscale
+- $51+ = Splurge
 
-## 7. Click Handling (Temporary)
+Drinks:
+- $0 = None
+- $1-3 = Home
+- $4-8 = Café
+- $9-15 = Single
+- $16-24 = Round
+- $25-37 = Night
+- $38-50 = Fancy
+- $51+ = Splurge
 
-- Clicking any non-future period should console.log the date and period type
-- Example: console.log("Clicked:", { date: "2025-01-15", period: "PM" })
-- Do not build the logging dialog yet
+Use the tier data from the database (min_amount, max_amount) rather than hardcoding.
 
-## 8. Styling
+## 4. Current Period Behavior
 
-Dark retro aesthetic:
-- Dark background for the calendar container
-- Subtle grid borders or bevel effect on period cells
-- Tier colors should pop against the dark background
-- Pulsing animation should feel slightly retro (consider step-based animation rather than smooth ease)
-- Chunky navigation buttons with visible depth/borders
-- High contrast text for day numbers and labels
+When clicking the current period's "+" button:
+- Open the same logging dialog
+- Same behavior as clicking an unlogged past period
 
-## 9. Edge Cases
+## 5. Auto-close Elapsed Periods
 
-- Handle months with different day counts (28, 29, 30, 31)
-- First day of month alignment (not needed if using list layout vs traditional calendar grid)
-- If user has no user_settings record, use defaults (am_start_hour: 7, pm_start_hour: 15)
+This can be handled implicitly:
+- Periods without entries are treated as Free/None ($0) in calculations
+- No need to actually create $0 records for every elapsed period
+- The calendar just shows them as gray (unlogged)
 
-## Do NOT build yet:
-- Logging dialog (Phase 4)
-- Progress panel (Phase 5)
-- Hover tooltips showing dollar amounts
+## 6. Styling
+
+Match the dark retro aesthetic:
+- Dialog has dark background (#1a1a1a or similar) with subtle border
+- Tier buttons are chunky with visible depth
+- Tier colors used as backgrounds on tier selection buttons
+- Selected tier has prominent highlight (border, glow, or scale)
+- Input fields have dark backgrounds with light text
+- Buttons match the retro chunky style
+- Modal backdrop dims the calendar behind
+
+## 7. Integration
+
+- Dialog state managed in CalendarView or lifted to Dashboard
+- After save/clear, refetch period_entries for the month to update calendar
+- Ensure the correct category_id is used based on active tab

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { LoggingDialog } from './LoggingDialog'
 
 interface Category {
   id: string
@@ -8,14 +9,23 @@ interface Category {
 }
 
 interface PeriodEntry {
+  id: string
   date: string
   period_type: 'AM' | 'PM'
   tier_id: string | null
+  dollar_amount: number | null
+  note: string | null
 }
 
 interface Tier {
   id: string
+  name: string
+  min_amount: number
+  max_amount: number
+  default_value: number
+  sort_order: number
   color: string
+  category_id: string
 }
 
 interface UserSettings {
@@ -41,6 +51,10 @@ export function CalendarView() {
   const [tiers, setTiers] = useState<Tier[]>([])
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS)
   const [loading, setLoading] = useState(true)
+  const [dialogInfo, setDialogInfo] = useState<{
+    date: string
+    period: 'AM' | 'PM'
+  } | null>(null)
 
   const now = new Date()
   const isCurrentMonth =
@@ -59,7 +73,7 @@ export function CalendarView() {
           .eq('user_id', userId),
         supabase
           .from('tiers')
-          .select('id, color')
+          .select('id, name, min_amount, max_amount, default_value, sort_order, color, category_id')
           .eq('user_id', userId),
         supabase
           .from('user_settings')
@@ -84,7 +98,7 @@ export function CalendarView() {
 
     const { data } = await supabase
       .from('period_entries')
-      .select('date, period_type, tier_id')
+      .select('id, date, period_type, tier_id, dollar_amount, note')
       .eq('user_id', userId)
       .eq('category_id', activeCategoryId)
       .gte('date', startDate)
@@ -138,14 +152,35 @@ export function CalendarView() {
     }
 
     // Today
+    const entry = entries.find(e => e.date === dateStr && e.period_type === period)
     if (currentPeriod) {
       const periodOrder = { AM: 0, PM: 1 }
       if (periodOrder[period] > periodOrder[currentPeriod.period]) return 'future'
-      if (period === currentPeriod.period) return 'current'
+      if (period === currentPeriod.period) {
+        return entry ? 'past-logged' : 'current'
+      }
     }
 
-    const entry = entries.find(e => e.date === dateStr && e.period_type === period)
     return entry ? 'past-logged' : 'past-unlogged'
+  }
+
+  const getEntryForCell = (day: number, period: 'AM' | 'PM') => {
+    const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    return entries.find(e => e.date === dateStr && e.period_type === period) ?? null
+  }
+
+  const getTierForEntry = (entry: PeriodEntry | null) => {
+    if (!entry?.tier_id) return null
+    return tiers.find(t => t.id === entry.tier_id) ?? null
+  }
+
+  // Determine if text should be dark or light based on background color luminance
+  const textColorForBg = (hex: string): string => {
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance > 0.5 ? '#1a1a1a' : '#f0f0f0'
   }
 
   const getTierColor = (day: number, period: 'AM' | 'PM'): string | null => {
@@ -157,7 +192,18 @@ export function CalendarView() {
 
   const handleClick = (day: number, period: 'AM' | 'PM') => {
     const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    console.log('Clicked:', { date: dateStr, period })
+    setDialogInfo({ date: dateStr, period })
+  }
+
+  const getExistingEntry = (date: string, period: 'AM' | 'PM') => {
+    const entry = entries.find(e => e.date === date && e.period_type === period)
+    if (!entry || !entry.tier_id) return null
+    return {
+      id: entry.id,
+      tier_id: entry.tier_id,
+      dollar_amount: entry.dollar_amount,
+      note: entry.note,
+    }
   }
 
   const prevMonth = () => {
@@ -287,6 +333,12 @@ export function CalendarView() {
                           const isCurrent = state === 'current'
                           const isFuture = state === 'future'
                           const isLogged = state === 'past-logged'
+                          const entry = getEntryForCell(day, period)
+                          const tier = getTierForEntry(entry)
+                          const textColor = isLogged && tierColor
+                            ? textColorForBg(tierColor)
+                            : undefined
+                          const hasDetail = entry && (entry.dollar_amount || entry.note)
 
                           return (
                             <button
@@ -294,7 +346,8 @@ export function CalendarView() {
                               onClick={() => !isFuture && handleClick(day, period)}
                               disabled={isFuture}
                               className={`
-                                h-6 rounded border transition-colors relative flex items-center justify-center
+                                rounded border transition-colors relative flex flex-col items-center justify-center
+                                h-10
                                 ${isFuture
                                   ? 'bg-surface-light/30 border-border/20 cursor-default opacity-30'
                                   : isCurrent
@@ -318,7 +371,28 @@ export function CalendarView() {
                               {isCurrent && (
                                 <span className="text-accent font-bold text-sm">+</span>
                               )}
-                              {!isCurrent && !isFuture && (
+                              {isLogged && tier && (
+                                <>
+                                  <span
+                                    className="text-xs font-bold leading-tight"
+                                    style={{ color: textColor }}
+                                  >
+                                    {tier.name}
+                                  </span>
+                                  {hasDetail && (
+                                    <span
+                                      className="text-[9px] leading-tight opacity-80 truncate max-w-full px-0.5"
+                                      style={{ color: textColor }}
+                                    >
+                                      {[
+                                        entry.dollar_amount ? `$${entry.dollar_amount}` : '',
+                                        entry.note || '',
+                                      ].filter(Boolean).join(' · ')}
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                              {!isCurrent && !isFuture && !isLogged && (
                                 <span className="text-[10px] font-semibold text-white/60">
                                   {period}
                                 </span>
@@ -334,6 +408,22 @@ export function CalendarView() {
             </div>
           </div>
         </>
+      )}
+
+      {dialogInfo && activeCategoryId && userId && (
+        <LoggingDialog
+          date={dialogInfo.date}
+          period={dialogInfo.period}
+          categoryId={activeCategoryId}
+          userId={userId}
+          tiers={tiers}
+          existingEntry={getExistingEntry(dialogInfo.date, dialogInfo.period)}
+          onClose={() => setDialogInfo(null)}
+          onSaved={() => {
+            setDialogInfo(null)
+            loadEntries()
+          }}
+        />
       )}
     </div>
   )
