@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { CalendarView } from './CalendarView'
 
 export function AppShell() {
   const { signOut } = useAuth()
@@ -23,8 +24,8 @@ export function AppShell() {
           </button>
         </div>
       </header>
-      <main className="flex-1 flex items-center justify-center">
-        <p className="text-text-muted text-lg">Dashboard coming soon...</p>
+      <main className="flex-1 flex">
+        <CalendarView />
       </main>
     </div>
   )
