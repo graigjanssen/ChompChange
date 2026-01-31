@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { getPeriodsInMonth, getMonthStr, getMonthLabel } from '../lib/budget'
 
 interface Category {
   id: string
@@ -22,57 +23,112 @@ interface Tier {
 interface TierAllocation {
   tierId: string
   count: number
-  isVariable: boolean
 }
-
-const MAX_PERIODS = 60
 
 export function BudgetAllocation() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+
+  const mode = (searchParams.get('mode') || 'next') as 'next' | 'current'
+
+  const now = new Date()
+  const targetYear = mode === 'next'
+    ? (now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear())
+    : now.getFullYear()
+  const targetMonth = mode === 'next'
+    ? ((now.getMonth() + 1) % 12)
+    : now.getMonth()
+
+  const periodCount = getPeriodsInMonth(targetYear, targetMonth)
+  const targetMonthStr = getMonthStr(targetYear, targetMonth)
+  const targetMonthLabel = getMonthLabel(targetYear, targetMonth)
+
   const [categories, setCategories] = useState<Category[]>([])
   const [tiers, setTiers] = useState<Tier[]>([])
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
   const [allocations, setAllocations] = useState<Record<string, TierAllocation[]>>({})
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const [adjustMessage, setAdjustMessage] = useState('')
   const [loading, setLoading] = useState(true)
-  const [existingConfigIds, setExistingConfigIds] = useState<Record<string, string>>({})
-
-  const getNextMonth = () => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1)
-      .toISOString()
-      .split('T')[0]
-  }
-
-  const getCurrentMonth = () => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth(), 1)
-      .toISOString()
-      .split('T')[0]
-  }
 
   const userId = user?.id
+
+  // Auto-adjust allocations from source month to target month's period count
+  const autoAdjust = (
+    allocs: TierAllocation[],
+    catTiers: Tier[],
+    sourcePeriods: number,
+    targetPeriods: number,
+    catName: string
+  ): { adjusted: TierAllocation[]; message: string } => {
+    if (sourcePeriods === targetPeriods) {
+      return { adjusted: allocs, message: '' }
+    }
+
+    const result = allocs.map(a => ({ ...a }))
+    let diff = targetPeriods - sourcePeriods
+
+    // Sort tiers by sort_order for cheapest-first adjustment
+    // Filter to only tiers visible in budget allocation (exclude Free for Food, exclude Splurge)
+    const adjustableTierIds = catTiers
+      .filter(t => {
+        if (t.name === 'Splurge') return false
+        if (catName === 'Food' && t.sort_order === 0) return false
+        return true
+      })
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(t => t.id)
+
+    const changes: string[] = []
+
+    if (diff > 0) {
+      // Add periods to cheapest tiers first
+      for (const tierId of adjustableTierIds) {
+        if (diff <= 0) break
+        const alloc = result.find(a => a.tierId === tierId)
+        if (alloc) {
+          alloc.count += diff
+          const tier = catTiers.find(t => t.id === tierId)
+          changes.push(`+${diff} to ${tier?.name}`)
+          diff = 0
+        }
+      }
+    } else {
+      // Remove periods from cheapest tiers first
+      let toRemove = Math.abs(diff)
+      for (const tierId of adjustableTierIds) {
+        if (toRemove <= 0) break
+        const alloc = result.find(a => a.tierId === tierId)
+        if (alloc && alloc.count > 0) {
+          const remove = Math.min(alloc.count, toRemove)
+          alloc.count -= remove
+          toRemove -= remove
+          const tier = catTiers.find(t => t.id === tierId)
+          changes.push(`-${remove} from ${tier?.name}`)
+        }
+      }
+    }
+
+    const msg = changes.length > 0
+      ? `Adjusted ${changes.join(' and ')} to fit ${targetMonthLabel} (${targetPeriods} periods)`
+      : ''
+
+    return { adjusted: result, message: msg }
+  }
+
   const loadData = useCallback(async () => {
-    console.log('[budget] loadData called, userId:', userId)
     if (!userId) return
 
     try {
-      console.log('[budget] about to query categories...')
-      const result = await supabase
+      const { data: cats } = await supabase
         .from('categories')
         .select('id, name')
         .eq('user_id', userId)
         .order('name', { ascending: false })
-      console.log('[budget] query returned:', JSON.stringify(result))
-      const { data: cats, error: catsError } = result
 
-      console.log('[budget] categories:', cats, 'error:', catsError)
-      if (!cats || cats.length === 0) {
-        console.log('[budget] no categories, exiting')
-        return
-      }
+      if (!cats || cats.length === 0) return
 
       setCategories(cats)
       setActiveCategory(prev => prev ?? cats[0].id)
@@ -83,66 +139,113 @@ export function BudgetAllocation() {
         .eq('user_id', userId)
         .order('sort_order')
 
-      console.log('[budget] tiers:', tierData?.length)
       if (tierData) setTiers(tierData)
 
-      // Load existing configs for current or next month
-      const currentMonth = getCurrentMonth()
-      const nextMonth = getNextMonth()
-
-      const { data: configs } = await supabase
-        .from('budget_configs')
-        .select('id, category_id, effective_month')
-        .eq('user_id', userId)
-        .in('effective_month', [currentMonth, nextMonth])
-        .order('effective_month', { ascending: false })
-
-      console.log('[budget] configs:', configs)
       const newAllocations: Record<string, TierAllocation[]> = {}
-      const configIds: Record<string, string> = {}
+      let adjMsg = ''
 
       for (const cat of cats) {
         const catTiers = (tierData || []).filter(t => t.category_id === cat.id)
-        // Prefer next month config, fall back to current month
-        const config = configs?.find(c => c.category_id === cat.id)
 
-        if (config) {
-          configIds[cat.id] = config.id
-          const { data: allocs } = await supabase
-            .from('budget_allocations')
-            .select('tier_id, period_count, is_variable')
-            .eq('budget_config_id', config.id)
+        if (mode === 'current') {
+          // Load current month's config directly
+          const { data: config } = await supabase
+            .from('budget_configs')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('category_id', cat.id)
+            .eq('effective_month', targetMonthStr)
+            .maybeSingle()
 
-          if (allocs && allocs.length > 0) {
-            newAllocations[cat.id] = catTiers.map(t => {
-              const existing = allocs.find(a => a.tier_id === t.id)
-              return {
+          if (config) {
+            const { data: allocs } = await supabase
+              .from('budget_allocations')
+              .select('tier_id, period_count')
+              .eq('budget_config_id', config.id)
+
+            if (allocs && allocs.length > 0) {
+              newAllocations[cat.id] = catTiers.map(t => ({
                 tierId: t.id,
-                count: existing?.period_count ?? 0,
-                isVariable: existing?.is_variable ?? false,
-              }
-            })
-            continue
+                count: allocs.find(a => a.tier_id === t.id)?.period_count ?? 0,
+              }))
+              continue
+            }
           }
-        }
 
-        // Default: all zeros
-        newAllocations[cat.id] = catTiers.map(t => ({
-          tierId: t.id,
-          count: 0,
-          isVariable: false,
-        }))
+          // No config for current month — start empty
+          newAllocations[cat.id] = catTiers.map(t => ({ tierId: t.id, count: 0 }))
+        } else {
+          // "next" mode: check if next month already has a config
+          const { data: nextConfig } = await supabase
+            .from('budget_configs')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('category_id', cat.id)
+            .eq('effective_month', targetMonthStr)
+            .maybeSingle()
+
+          if (nextConfig) {
+            // Pre-fill from existing next month config
+            const { data: allocs } = await supabase
+              .from('budget_allocations')
+              .select('tier_id, period_count')
+              .eq('budget_config_id', nextConfig.id)
+
+            if (allocs && allocs.length > 0) {
+              newAllocations[cat.id] = catTiers.map(t => ({
+                tierId: t.id,
+                count: allocs.find(a => a.tier_id === t.id)?.period_count ?? 0,
+              }))
+              continue
+            }
+          }
+
+          // Fall back to current month's config and auto-adjust
+          const currentMonthStr = getMonthStr(now.getFullYear(), now.getMonth())
+          const { data: curConfig } = await supabase
+            .from('budget_configs')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('category_id', cat.id)
+            .lte('effective_month', currentMonthStr)
+            .order('effective_month', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (curConfig) {
+            const { data: allocs } = await supabase
+              .from('budget_allocations')
+              .select('tier_id, period_count')
+              .eq('budget_config_id', curConfig.id)
+
+            if (allocs && allocs.length > 0) {
+              const sourceAllocs = catTiers.map(t => ({
+                tierId: t.id,
+                count: allocs.find(a => a.tier_id === t.id)?.period_count ?? 0,
+              }))
+              const sourcePeriods = sourceAllocs.reduce((s, a) => s + a.count, 0)
+              const { adjusted, message: msg } = autoAdjust(
+                sourceAllocs, catTiers, sourcePeriods, periodCount, cat.name
+              )
+              newAllocations[cat.id] = adjusted
+              if (msg) adjMsg = msg
+              continue
+            }
+          }
+
+          // No config at all — start empty
+          newAllocations[cat.id] = catTiers.map(t => ({ tierId: t.id, count: 0 }))
+        }
       }
 
       setAllocations(newAllocations)
-      setExistingConfigIds(configIds)
+      setAdjustMessage(adjMsg)
     } catch (err) {
       console.error('[budget] loadData error:', err)
     } finally {
-      console.log('[budget] setLoading(false)')
       setLoading(false)
     }
-  }, [userId])
+  }, [userId, mode, targetMonthStr, periodCount])
 
   useEffect(() => {
     loadData()
@@ -156,7 +259,6 @@ export function BudgetAllocation() {
     t.name !== 'Splurge'
   )
   const totalCount = currentAllocations.reduce((sum, a) => sum + a.count, 0)
-  const variableCount = currentAllocations.filter(a => a.isVariable).length
 
   const monthlyTarget = currentAllocations.reduce((sum, a) => {
     const tier = currentTiers.find(t => t.id === a.tierId)
@@ -182,7 +284,7 @@ export function BudgetAllocation() {
     const othersTotal = currentAllocations
       .filter(a => a.tierId !== tierId)
       .reduce((sum, a) => sum + a.count, 0)
-    const clamped = Math.min(Math.max(0, value), MAX_PERIODS - othersTotal)
+    const clamped = Math.min(Math.max(0, value), periodCount - othersTotal)
     setAllocations(prev => ({
       ...prev,
       [activeCategory]: prev[activeCategory].map(a =>
@@ -192,38 +294,19 @@ export function BudgetAllocation() {
     setMessage('')
   }
 
-  const toggleVariable = (tierId: string) => {
-    if (!activeCategory) return
-    setAllocations(prev => ({
-      ...prev,
-      [activeCategory]: prev[activeCategory].map(a =>
-        a.tierId === tierId ? { ...a, isVariable: !a.isVariable } : a
-      ),
-    }))
-    setMessage('')
-  }
-
-  const canSave =
-    totalCount === MAX_PERIODS &&
-    variableCount === 2 &&
-    currentAllocations
-      .filter(a => a.isVariable)
-      .every(a => a.count >= 2)
+  const canSave = totalCount === periodCount
 
   const handleSave = async () => {
     if (!activeCategory || !user || !canSave) return
     setSaving(true)
 
-    const effectiveMonth = getCurrentMonth()
-
-    // Upsert budget_config
     const { data: config, error: configError } = await supabase
       .from('budget_configs')
       .upsert(
         {
           user_id: user.id,
           category_id: activeCategory,
-          effective_month: effectiveMonth,
+          effective_month: targetMonthStr,
         },
         { onConflict: 'user_id,category_id,effective_month' }
       )
@@ -236,18 +319,16 @@ export function BudgetAllocation() {
       return
     }
 
-    // Delete old allocations for this config
     await supabase
       .from('budget_allocations')
       .delete()
       .eq('budget_config_id', config.id)
 
-    // Insert new allocations
     const rows = currentAllocations.map(a => ({
       budget_config_id: config.id,
       tier_id: a.tierId,
       period_count: a.count,
-      is_variable: a.isVariable,
+      is_variable: false,
     }))
 
     const { error: allocError } = await supabase
@@ -256,9 +337,10 @@ export function BudgetAllocation() {
 
     if (allocError) {
       setMessage('Error saving allocations.')
+    } else if (mode === 'next') {
+      setMessage(`${targetMonthLabel} budget saved. It will take effect on ${targetMonthLabel.split(' ')[0]} 1st.`)
     } else {
-      setMessage('Budget saved!')
-      setExistingConfigIds(prev => ({ ...prev, [activeCategory]: config.id }))
+      setMessage(`${targetMonthLabel} budget updated.`)
     }
 
     setSaving(false)
@@ -275,7 +357,17 @@ export function BudgetAllocation() {
   return (
     <div className="flex flex-col min-h-screen bg-bg-dark">
       <header className="flex items-center justify-between px-6 py-4 bg-surface border-b border-border">
-        <h1 className="text-2xl font-bold text-accent tracking-tight">Set Budget</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-accent tracking-tight">
+            {targetMonthLabel} — {periodCount} periods
+          </h1>
+          {mode === 'current' && (
+            <span className="text-xs text-text-muted">(Current Month)</span>
+          )}
+          {mode === 'next' && (
+            <span className="text-xs text-text-muted">Takes effect next month</span>
+          )}
+        </div>
         <button
           onClick={() => navigate('/')}
           className="text-sm text-text-muted hover:text-text border border-border px-3 py-1.5 rounded hover:border-accent transition-colors"
@@ -285,6 +377,13 @@ export function BudgetAllocation() {
       </header>
 
       <main className="flex-1 px-4 py-6 max-w-lg mx-auto w-full">
+        {/* Auto-adjustment message */}
+        {adjustMessage && (
+          <div className="mb-4 px-4 py-2 bg-surface-light border border-border rounded text-sm text-text-muted">
+            {adjustMessage}
+          </div>
+        )}
+
         {/* Category tabs */}
         <div className="flex mb-6 border border-border rounded overflow-hidden">
           {categories.map(cat => (
@@ -310,12 +409,12 @@ export function BudgetAllocation() {
           </div>
           <div
             className={`text-lg font-bold px-3 py-1 rounded ${
-              totalCount === MAX_PERIODS
+              totalCount === periodCount
                 ? 'text-green-400 bg-green-900/30 border border-green-700'
                 : 'text-text-muted bg-surface-light border border-border'
             }`}
           >
-            {totalCount} / {MAX_PERIODS}
+            {totalCount} / {periodCount}
           </div>
         </div>
 
@@ -325,13 +424,9 @@ export function BudgetAllocation() {
             const alloc = currentAllocations.find(a => a.tierId === tier.id)
             if (!alloc) return null
 
-            const barWidth = Math.round((alloc.count / MAX_PERIODS) * 100)
+            const barWidth = Math.round((alloc.count / periodCount) * 100)
             const minusDisabled = alloc.count <= 0
-            const plusDisabled = totalCount >= MAX_PERIODS
-            const variableDisabled =
-              !alloc.isVariable && variableCount >= 2
-            const variableInvalid =
-              alloc.isVariable && alloc.count < 2
+            const plusDisabled = totalCount >= periodCount
 
             return (
               <div
@@ -355,26 +450,6 @@ export function BudgetAllocation() {
                       }
                     </span>
                   </div>
-
-                  {/* Variable toggle */}
-                  <label
-                    className={`flex items-center gap-1.5 text-xs cursor-pointer ${
-                      variableDisabled
-                        ? 'text-text-muted/50 cursor-not-allowed'
-                        : variableInvalid
-                        ? 'text-red-400'
-                        : 'text-text-muted'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={alloc.isVariable}
-                      disabled={variableDisabled}
-                      onChange={() => toggleVariable(tier.id)}
-                      className="accent-accent"
-                    />
-                    Flex
-                  </label>
                 </div>
 
                 {/* HP bar */}
@@ -449,14 +524,8 @@ export function BudgetAllocation() {
 
         {!canSave && totalCount > 0 && (
           <p className="text-text-muted text-xs mt-2 text-center">
-            {totalCount !== MAX_PERIODS && `Allocate all ${MAX_PERIODS} periods. `}
-            {variableCount !== 2 && `Select exactly 2 flex tiers. `}
-            {currentAllocations
-              .filter(a => a.isVariable && a.count < 2)
-              .map(a => {
-                const t = currentTiers.find(t => t.id === a.tierId)
-                return t ? `${t.name} needs at least 2 periods. ` : ''
-              })}
+            {totalCount < periodCount && `${periodCount - totalCount} periods remaining. `}
+            {totalCount > periodCount && `${totalCount - periodCount} periods over. `}
           </p>
         )}
 

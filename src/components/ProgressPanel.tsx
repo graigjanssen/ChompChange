@@ -11,6 +11,7 @@ import {
   Tooltip,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { getPeriodsInMonth, getMonthLabel } from '../lib/budget'
 
 interface Tier {
   id: string
@@ -33,7 +34,6 @@ interface PeriodEntry {
 interface Allocation {
   tier_id: string
   period_count: number
-  is_variable: boolean
 }
 
 interface ProgressPanelProps {
@@ -56,12 +56,14 @@ export function ProgressPanel({
   const [loading, setLoading] = useState(true)
 
   const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate()
-  const totalPeriods = daysInMonth * 2
 
-  // Variable tier adjustment: base is 60 periods (30 days)
-  const periodDiff = totalPeriods - 60 // e.g. +2 for 31 days, -4 for 28 days
-  const perVariableAdj = Math.floor(periodDiff / 2) // split between 2 variable tiers
-  const remainder = periodDiff % 2
+  const today = new Date()
+  const isCurrentMonth =
+    viewDate.year === today.getFullYear() && viewDate.month === today.getMonth()
+  const isPastMonth =
+    viewDate.year < today.getFullYear() ||
+    (viewDate.year === today.getFullYear() && viewDate.month < today.getMonth())
+  const currentDay = isCurrentMonth ? today.getDate() : null
 
   const categoryTiers = useMemo(
     () => tiers.filter(t => t.category_id === categoryId).sort((a, b) => a.sort_order - b.sort_order),
@@ -74,7 +76,6 @@ export function ProgressPanel({
 
     const monthStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, '0')}-01`
 
-    // Look for exact month match, or fall back to most recent config before this month
     const { data: config } = await supabase
       .from('budget_configs')
       .select('id')
@@ -94,7 +95,7 @@ export function ProgressPanel({
 
     const { data: allocs } = await supabase
       .from('budget_allocations')
-      .select('tier_id, period_count, is_variable')
+      .select('tier_id, period_count')
       .eq('budget_config_id', config.id)
 
     setAllocations(allocs || [])
@@ -108,25 +109,18 @@ export function ProgressPanel({
 
   // Build tier progress data
   const tierProgress = useMemo(() => {
-    let variableIndex = 0
     return categoryTiers
       .map(tier => {
         const alloc = allocations.find(a => a.tier_id === tier.id)
         if (!alloc || alloc.period_count === 0) return null
 
-        let budgeted = alloc.period_count
-        if (alloc.is_variable) {
-          budgeted += perVariableAdj + (variableIndex === 0 ? remainder : 0)
-          variableIndex++
-        }
-        budgeted = Math.max(0, budgeted)
-
+        const budgeted = alloc.period_count
         const used = entries.filter(e => e.tier_id === tier.id).length
 
-        return { tier, budgeted, used, isVariable: alloc.is_variable }
+        return { tier, budgeted, used }
       })
-      .filter(Boolean) as { tier: Tier; budgeted: number; used: number; isVariable: boolean }[]
-  }, [categoryTiers, allocations, entries, perVariableAdj, remainder])
+      .filter(Boolean) as { tier: Tier; budgeted: number; used: number }[]
+  }, [categoryTiers, allocations, entries])
 
   // Monthly budget target
   const monthlyTarget = useMemo(() => {
@@ -152,10 +146,7 @@ export function ProgressPanel({
   const chartData = useMemo(() => {
     const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
     let cumulative = 0
-    const today = new Date()
-    const isCurrentMonth =
-      viewDate.year === today.getFullYear() && viewDate.month === today.getMonth()
-    const currentDay = isCurrentMonth ? today.getDate() : daysInMonth
+    const chartCurrentDay = isCurrentMonth ? today.getDate() : daysInMonth
 
     const points = days.map(day => {
       const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -176,29 +167,24 @@ export function ProgressPanel({
 
       return {
         day,
-        actual: day <= currentDay ? Math.round(cumulative) : undefined,
+        actual: day <= chartCurrentDay ? Math.round(cumulative) : undefined,
         pace,
       }
     })
 
     // Projected finish line
-    if (isCurrentMonth && currentDay > 0 && currentDay < daysInMonth) {
-      const currentSpend = points[currentDay - 1]?.actual ?? 0
-      const dailyAvg = currentSpend / currentDay
+    if (isCurrentMonth && chartCurrentDay > 0 && chartCurrentDay < daysInMonth) {
+      const currentSpend = points[chartCurrentDay - 1]?.actual ?? 0
+      const dailyAvg = currentSpend / chartCurrentDay
       let projected = currentSpend
-      for (let d = currentDay + 1; d <= daysInMonth; d++) {
+      for (let d = chartCurrentDay + 1; d <= daysInMonth; d++) {
         projected += dailyAvg
-        points[d - 1].projected = Math.round(projected)
+        ;(points[d - 1] as any).projected = Math.round(projected)
       }
     }
 
     return points
-  }, [entries, categoryTiers, viewDate, daysInMonth, monthlyTarget])
-
-  const today = new Date()
-  const isCurrentMonth =
-    viewDate.year === today.getFullYear() && viewDate.month === today.getMonth()
-  const currentDay = isCurrentMonth ? today.getDate() : null
+  }, [entries, categoryTiers, viewDate, daysInMonth, monthlyTarget, isCurrentMonth])
 
   if (loading) {
     return (
@@ -208,16 +194,20 @@ export function ProgressPanel({
     )
   }
 
+  const monthLabel = getMonthLabel(viewDate.year, viewDate.month)
+
   if (!hasBudget) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4">
-        <p className="text-text-muted text-sm">No budget set for this month</p>
-        <Link
-          to="/budget"
-          className="text-sm text-accent border border-accent px-3 py-1.5 rounded hover:bg-accent hover:text-white transition-colors"
-        >
-          Set Budget
-        </Link>
+        <p className="text-text-muted text-sm">No budget set for {monthLabel}</p>
+        {!isPastMonth && (
+          <Link
+            to="/budget?mode=current"
+            className="text-sm text-accent border border-accent px-3 py-1.5 rounded hover:bg-accent hover:text-white transition-colors"
+          >
+            Set {monthLabel.split(' ')[0]} Budget
+          </Link>
+        )}
       </div>
     )
   }
@@ -246,7 +236,7 @@ export function ProgressPanel({
 
       {/* Tier progress bars */}
       <div className="flex flex-col gap-6">
-        {tierProgress.map(({ tier, budgeted, used, isVariable }) => {
+        {tierProgress.map(({ tier, budgeted, used }) => {
           const overflow = used > budgeted
           const barSegments = Math.max(budgeted, used)
 
@@ -278,9 +268,6 @@ export function ProgressPanel({
                   <span className="text-xs text-text-muted">
                     {rangeLabel}
                   </span>
-                  {isVariable && (
-                    <span className="text-[10px] text-text-muted">FLEX</span>
-                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span
@@ -327,7 +314,6 @@ export function ProgressPanel({
       {/* Free/None and Splurge indicators */}
       {(() => {
         const freeTier = categoryTiers.find(t => t.name === 'Free')
-        const noneTier = categoryTiers.find(t => t.name === 'None')
         const splurgeTier = categoryTiers.find(t => t.name === 'Splurge')
 
         const freeCount = freeTier
@@ -342,7 +328,6 @@ export function ProgressPanel({
           return sum
         }, 0)
 
-        // Food: show Free + Splurge. Drinks: show Splurge only (None is in progress bars)
         const showFree = !!freeTier
         const showSplurge = !!splurgeTier
 
@@ -384,6 +369,16 @@ export function ProgressPanel({
           </div>
         )
       })()}
+
+      {/* Edit This Month's Budget link — only for current month */}
+      {isCurrentMonth && (
+        <Link
+          to="/budget?mode=current"
+          className="text-sm text-text-muted hover:text-accent transition-colors"
+        >
+          Edit {monthLabel.split(' ')[0]} Budget
+        </Link>
+      )}
 
       {/* Cumulative spend chart */}
       <div>

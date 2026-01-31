@@ -11,10 +11,10 @@ export function AppShell() {
         <h1 className="text-2xl font-bold text-accent tracking-tight">ChompChange</h1>
         <div className="flex items-center gap-3">
           <Link
-            to="/budget"
+            to="/budget?mode=next"
             className="text-sm text-text-muted hover:text-text border border-border px-3 py-1.5 rounded hover:border-accent transition-colors"
           >
-            Set Budget
+            Set Next Month
           </Link>
           <button
             onClick={signOut}
