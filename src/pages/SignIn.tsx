@@ -54,7 +54,7 @@ export function SignIn() {
           <button
             type="submit"
             disabled={loading}
-            className="bg-accent text-bg-dark font-semibold py-2 rounded hover:bg-accent-dim transition-colors disabled:opacity-50"
+            className="bg-accent text-white font-semibold py-2 rounded hover:bg-accent-dim transition-colors disabled:opacity-50"
           >
             {loading ? 'Signing in...' : 'Sign In'}
           </button>

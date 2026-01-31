@@ -214,7 +214,7 @@ export function BudgetAllocation() {
     if (!activeCategory || !user || !canSave) return
     setSaving(true)
 
-    const effectiveMonth = getNextMonth()
+    const effectiveMonth = getCurrentMonth()
 
     // Upsert budget_config
     const { data: config, error: configError } = await supabase
@@ -257,7 +257,7 @@ export function BudgetAllocation() {
     if (allocError) {
       setMessage('Error saving allocations.')
     } else {
-      setMessage('Saved! Changes take effect next month.')
+      setMessage('Budget saved!')
       setExistingConfigIds(prev => ({ ...prev, [activeCategory]: config.id }))
     }
 
@@ -293,7 +293,7 @@ export function BudgetAllocation() {
               onClick={() => setActiveCategory(cat.id)}
               className={`flex-1 py-2 text-sm font-semibold transition-colors ${
                 activeCategory === cat.id
-                  ? 'bg-accent text-bg-dark'
+                  ? 'bg-accent-dim text-white'
                   : 'bg-surface text-text-muted hover:text-text'
               }`}
             >
@@ -442,7 +442,7 @@ export function BudgetAllocation() {
         <button
           onClick={handleSave}
           disabled={!canSave || saving}
-          className="w-full mt-6 bg-accent text-bg-dark font-semibold py-3 rounded-lg hover:bg-accent-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full mt-6 bg-accent text-white font-semibold py-3 rounded-lg hover:bg-accent-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving...' : 'Save Budget'}
         </button>

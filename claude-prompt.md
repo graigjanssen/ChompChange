@@ -1,122 +1,127 @@
-# Phase 4: Logging Flow
+# Phase 5: Progress Panel
 
-Build the logging dialog for recording period entries.
+Build the progress panel showing budget tracking for the current month.
 
-## 1. Logging Dialog Component
+## 1. Layout Integration
 
-Create a modal/dialog that appears when clicking any non-future period.
+- Adjust the dashboard to a two-panel layout
+- Left panel (2/3 width): Calendar view (already built)
+- Right panel (1/3 width): Progress panel (this phase)
+- Progress panel scrolls independently if content exceeds viewport
 
-### Dialog header
-- Show the date and period type (e.g., "January 15 - PM")
-- Close button (X) in the corner
+## 2. Progress Panel Header
 
-### Tier selection
-- Display all tiers for the active category as selectable buttons or cards
-- Include Free/None tier (the $0 tier)
-- Include Splurge tier
-- Show tier name and dollar range on each option (e.g., "Casual $11-17")
-- Visually highlight the selected tier
-- Use each tier's color as background or accent
+- Show "Progress" or the month name as header
+- Display the monthly budget target in large text (e.g., "$847")
+- This target comes from the budget_config for the current month
 
-### Dollar amount field (optional)
-- Number input field, initially empty
-- Placeholder text: "Optional: exact amount"
-- When filled, the value maps to the appropriate tier for color-coding:
-  - Find the tier where min_amount <= value <= max_amount
-  - If value > 50, maps to Splurge
-- When Splurge tier is selected, this field becomes required
-  - Show validation message if Splurge selected without amount
+## 3. Tier Progress Bars
 
-### Note field (optional)
-- Text input field
-- Placeholder text: "Optional: add a note"
-- Single line is fine, or small textarea
+For each tier that has an allocation (exclude tiers with 0 budgeted):
 
-### Action buttons
-- "Save" button - disabled if Splurge selected without dollar amount
-- "Cancel" button - closes dialog without saving
-- If editing an existing entry, also show "Clear" button to remove the entry
+### Display per tier:
+- Tier name and color indicator
+- Progress bar showing periods used vs budgeted
+- Count text: "X / Y" (e.g., "3 / 15")
 
-## 2. Dialog Behavior
+### Progress bar styling:
+- Chunky segmented style like RPG HP bars
+- Each segment represents one period
+- Filled segments for used periods (tier color)
+- Empty segments for remaining budgeted periods (dark/muted)
+- If user exceeds budget for a tier, show overflow visually (extended bar or warning color)
 
-### Opening for new entry (unlogged period)
-- All fields empty
-- No tier pre-selected
+### Variable tier adjustments:
+- Get actual days in the displayed month (28, 29, 30, or 31)
+- Calculate period adjustment:
+  - 30 days (60 periods): no adjustment
+  - 31 days (62 periods): +1 to each variable tier
+  - 28 days (56 periods): -2 from each variable tier
+  - 29 days (58 periods): -1 from each variable tier
+- Apply adjustment to the budgeted count for variable tiers
+- Show adjusted numbers in the display
 
-### Opening for existing entry (logged period)
-- Pre-select the saved tier
-- Pre-fill dollar amount if one was saved
-- Pre-fill note if one was saved
-- Show "Clear" button to delete the entry
+## 4. Calculating Periods Used
 
-### On Save
-- If new entry: INSERT into period_entries
-- If existing entry: UPDATE the period_entry
-- Required fields: user_id, category_id, date, period_type, tier_id
-- Optional fields: dollar_amount, note
-- Close dialog after successful save
-- Calendar should reflect the change (tier color)
+For each tier, count period_entries for the displayed month where:
+- category_id matches active category
+- tier_id matches the tier
+- Include entries where dollar_amount maps to this tier (if user entered custom amount)
 
-### On Clear (existing entries only)
-- DELETE the period_entry
-- Close dialog
-- Calendar should show period as gray (unlogged)
+For mapping custom amounts to tiers:
+- Use the tier's min_amount and max_amount
+- An entry with dollar_amount of $14 maps to whatever tier contains 14 in its range
 
-### On Cancel
-- Close dialog without any database changes
+## 5. Cumulative Spend Chart
 
-## 3. Dollar Amount to Tier Mapping
+Below the progress bars, show a line or area chart:
 
-When user enters a dollar amount, determine the tier:
+### X-axis
+- Days of the month (1 to 28/29/30/31)
+- Mark current day
 
-Food:
-- $0 = Free
-- $1-5 = Light
-- $6-10 = Simple
-- $11-17 = Casual
-- $18-26 = Takeout
-- $27-37 = Dining
-- $38-50 = Upscale
-- $51+ = Splurge
+### Y-axis
+- Dollar amounts from $0 to budget target (or slightly above)
 
-Drinks:
-- $0 = None
-- $1-3 = Home
-- $4-8 = Café
-- $9-15 = Single
-- $16-24 = Round
-- $25-37 = Night
-- $38-50 = Fancy
-- $51+ = Splurge
+### Lines to display:
 
-Use the tier data from the database (min_amount, max_amount) rather than hardcoding.
+#### Actual spend line
+- Cumulative sum of spending by day
+- For each period_entry:
+  - Use dollar_amount if provided
+  - Otherwise use tier's default_value
+- Plot the running total
 
-## 4. Current Period Behavior
+#### Pace line (target trajectory)
+- Straight line from $0 on day 1 to budget target on last day
+- Shows where you "should" be for even spending
 
-When clicking the current period's "+" button:
-- Open the same logging dialog
-- Same behavior as clicking an unlogged past period
+#### Projected finish (optional enhancement)
+- Extend actual spend line to end of month based on current average
+- Dashed line style
 
-## 5. Auto-close Elapsed Periods
+### Chart styling:
+- Dark background matching app theme
+- Actual spend line in a bright accent color (teal or amber)
+- Pace line in muted gray or dashed white
+- Grid lines subtle
+- Clear labels
 
-This can be handled implicitly:
-- Periods without entries are treated as Free/None ($0) in calculations
-- No need to actually create $0 records for every elapsed period
-- The calendar just shows them as gray (unlogged)
+## 6. Data Loading
 
-## 6. Styling
+Fetch for the displayed month:
+- budget_config and budget_allocations for the active category
+- period_entries for the active category
+- Calculate totals and populate progress bars and chart
 
-Match the dark retro aesthetic:
-- Dialog has dark background (#1a1a1a or similar) with subtle border
-- Tier buttons are chunky with visible depth
-- Tier colors used as backgrounds on tier selection buttons
-- Selected tier has prominent highlight (border, glow, or scale)
-- Input fields have dark backgrounds with light text
-- Buttons match the retro chunky style
-- Modal backdrop dims the calendar behind
+## 7. Empty States
 
-## 7. Integration
+If no budget configured:
+- Show message: "No budget set for this month"
+- Link or button to budget allocation
 
-- Dialog state managed in CalendarView or lifted to Dashboard
-- After save/clear, refetch period_entries for the month to update calendar
-- Ensure the correct category_id is used based on active tab
+If no entries yet:
+- Progress bars show 0 / X for each tier
+- Chart shows just the pace line, actual spend at $0
+
+## 8. Category Switching
+
+- Progress panel updates when switching Food/Drinks tabs
+- Each category has its own budget config and entries
+- Combined tab: show placeholder for now (or combined totals if straightforward)
+
+## 9. Month Navigation
+
+- Progress panel updates when navigating to different months
+- Historical months show completed data
+- Future months show budget only (no entries)
+
+## 10. Styling
+
+Match dark retro aesthetic:
+- Panel has subtle border or elevation separating it from calendar
+- Progress bars are chunky with visible segments
+- Tier colors match calendar colors
+- Chart has retro feel (consider stepped lines vs smooth curves)
+- Numbers are high contrast and readable
+- Use Recharts library for the chart

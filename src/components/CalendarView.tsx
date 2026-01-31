@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { LoggingDialog } from './LoggingDialog'
+import { ProgressPanel } from './ProgressPanel'
 
 interface Category {
   id: string
@@ -234,16 +235,18 @@ export function CalendarView() {
   }
 
   return (
-    <div className="flex-1 flex flex-col px-4 py-4 max-w-[40%] min-w-[500px] mx-auto w-full">
+    <div className="flex-1 flex gap-6 px-6 py-4 max-w-[1400px] mx-auto w-full">
+    {/* Left panel: Calendar */}
+    <div className="flex-[2] flex flex-col min-w-0">
       {/* Category tabs */}
-      <div className="flex mb-4 border border-border rounded overflow-hidden">
+      <div className="flex mb-5 border border-border rounded overflow-hidden">
         {(['Food', 'Drinks', 'Combined'] as TabType[]).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-2 text-sm font-semibold transition-colors ${
               activeTab === tab
-                ? 'bg-accent text-bg-dark'
+                ? 'bg-accent-dim text-white'
                 : 'bg-surface text-text-muted hover:text-text'
             }`}
           >
@@ -259,7 +262,7 @@ export function CalendarView() {
       ) : (
         <>
           {/* Month header */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-5">
             <button
               onClick={prevMonth}
               className="w-9 h-9 flex items-center justify-center rounded bg-surface-light border-2 border-border text-text font-bold text-lg hover:border-accent transition-colors"
@@ -308,7 +311,7 @@ export function CalendarView() {
             </div>
 
             {/* Weeks */}
-            <div className="grid grid-cols-7 gap-y-2">
+            <div className="grid grid-cols-7 gap-y-3">
               {calendarGrid.map((day, i) => (
                 <div
                   key={i}
@@ -326,7 +329,7 @@ export function CalendarView() {
                       </div>
 
                       {/* AM / PM cells */}
-                      <div className="flex flex-col gap-1 px-1 pb-1 flex-1 justify-center">
+                      <div className="flex flex-col gap-1.5 px-1 pb-1.5 flex-1 justify-center">
                         {(['AM', 'PM'] as const).map(period => {
                           const state = getPeriodState(day, period)
                           const tierColor = getTierColor(day, period)
@@ -347,7 +350,7 @@ export function CalendarView() {
                               disabled={isFuture}
                               className={`
                                 rounded border transition-colors relative flex flex-col items-center justify-center
-                                h-10
+                                h-12
                                 ${isFuture
                                   ? 'bg-surface-light/30 border-border/20 cursor-default opacity-30'
                                   : isCurrent
@@ -361,7 +364,7 @@ export function CalendarView() {
                                 backgroundColor: isLogged && tierColor
                                   ? tierColor
                                   : isCurrent
-                                  ? 'rgba(0, 229, 255, 0.15)'
+                                  ? 'rgba(0, 144, 168, 0.25)'
                                   : undefined,
                                 boxShadow: !isFuture
                                   ? 'inset 0 -1px 0 rgba(0,0,0,0.25)'
@@ -374,15 +377,13 @@ export function CalendarView() {
                               {isLogged && tier && (
                                 <>
                                   <span
-                                    className="text-xs font-bold leading-tight"
-                                    style={{ color: textColor }}
+                                    className="text-sm font-bold leading-tight text-white"
                                   >
                                     {tier.name}
                                   </span>
                                   {hasDetail && (
                                     <span
-                                      className="text-[9px] leading-tight opacity-80 truncate max-w-full px-0.5"
-                                      style={{ color: textColor }}
+                                      className="text-[10px] leading-tight truncate max-w-full px-0.5 text-white/90"
                                     >
                                       {[
                                         entry.dollar_amount ? `$${entry.dollar_amount}` : '',
@@ -393,7 +394,7 @@ export function CalendarView() {
                                 </>
                               )}
                               {!isCurrent && !isFuture && !isLogged && (
-                                <span className="text-[10px] font-semibold text-white/60">
+                                <span className="text-xs font-semibold text-white/70">
                                   {period}
                                 </span>
                               )}
@@ -425,6 +426,22 @@ export function CalendarView() {
           }}
         />
       )}
+    </div>
+
+    {/* Right panel: Progress */}
+    {activeTab !== 'Combined' && (
+      <div className="flex-1 min-w-[280px] max-w-[380px] bg-surface border border-border rounded-lg p-4 overflow-y-auto self-start sticky top-4">
+        {userId && activeCategoryId && (
+          <ProgressPanel
+            userId={userId}
+            categoryId={activeCategoryId}
+            tiers={tiers}
+            viewDate={viewDate}
+            entries={entries}
+          />
+        )}
+      </div>
+    )}
     </div>
   )
 }

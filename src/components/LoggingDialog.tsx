@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 
 interface Tier {
@@ -148,6 +148,21 @@ export function LoggingDialog({
     onSaved()
   }
 
+  const canSave = !!selectedTierId && !splurgeNeedsAmount && !saving
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      onClose()
+    } else if (e.key === 'Enter' && canSave) {
+      handleSave()
+    }
+  }, [canSave, onClose, handleSave])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
@@ -204,10 +219,10 @@ export function LoggingDialog({
                         : 'inset 0 -2px 0 rgba(0,0,0,0.3)',
                     }}
                   >
-                    <div className="text-sm font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
+                    <div className="text-sm font-bold text-white">
                       {tier.name}
                     </div>
-                    <div className="text-xs text-white/80 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
+                    <div className="text-xs text-white/80">
                       {rangeLabel}
                     </div>
                   </button>
@@ -268,7 +283,7 @@ export function LoggingDialog({
             <button
               onClick={handleSave}
               disabled={saving || !selectedTierId || splurgeNeedsAmount}
-              className="flex-1 bg-accent text-bg-dark font-semibold py-2.5 rounded-lg hover:bg-accent-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 bg-accent text-white font-semibold py-2.5 rounded-lg hover:bg-accent-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.2)' }}
             >
               {saving ? 'Saving...' : 'Save'}
